@@ -10791,6 +10791,8 @@ var Inputs;
     Inputs["IfNoFilesFound"] = "if-no-files-found";
     Inputs["RetentionDays"] = "retention-days";
     Inputs["IncludeHiddenFiles"] = "include-hidden-files";
+    Inputs["ArtifactPerFile"] = "artifact-per-file";
+    Inputs["ArtifactNameRule"] = "artifact-name-rule";
 })(Inputs = exports.Inputs || (exports.Inputs = {}));
 var NoFileOptions;
 (function (NoFileOptions) {
@@ -10852,15 +10854,31 @@ function getInputs() {
     const ifNoFilesFound = core.getInput(constants_1.Inputs.IfNoFilesFound);
     const noFileBehavior = constants_1.NoFileOptions[ifNoFilesFound];
     const includeHiddenFiles = core.getBooleanInput(constants_1.Inputs.IncludeHiddenFiles);
+    const artifactPerFile = core.getBooleanInput(constants_1.Inputs.ArtifactPerFile);
+    const artifactNameRule = core.getInput(constants_1.Inputs.ArtifactNameRule);
     if (!noFileBehavior) {
         core.setFailed(`Unrecognized ${constants_1.Inputs.IfNoFilesFound} input. Provided: ${ifNoFilesFound}. Available options: ${Object.keys(constants_1.NoFileOptions)}`);
     }
-    const inputs = {
-        artifactName: name,
-        searchPath: path,
-        ifNoFilesFound: noFileBehavior,
-        includeHiddenFiles
+    const typedInputs = (artifactPerFile) => {
+        if (artifactPerFile) {
+            return {
+                artifactName: name,
+                searchPath: path,
+                ifNoFilesFound: noFileBehavior,
+                includeHiddenFiles: includeHiddenFiles
+            };
+        }
+        else {
+            return {
+                searchPath: path,
+                ifNoFilesFound: noFileBehavior,
+                includeHiddenFiles: includeHiddenFiles,
+                artifactPerFile: artifactPerFile,
+                artifactNameRule: artifactNameRule
+            };
+        }
     };
+    const inputs = typedInputs(artifactPerFile);
     const retentionDaysStr = core.getInput(constants_1.Inputs.RetentionDays);
     if (retentionDaysStr) {
         inputs.retentionDays = parseInt(retentionDaysStr);
@@ -11087,6 +11105,7 @@ const artifact_1 = __nccwpck_require__(2605);
 const search_1 = __nccwpck_require__(3930);
 const input_helper_1 = __nccwpck_require__(6455);
 const constants_1 = __nccwpck_require__(9042);
+const path = __importStar(__nccwpck_require__(1017));
 function run() {
     return __awaiter(this, void 0, void 0, function* () {
         try {
@@ -11123,12 +11142,91 @@ function run() {
                 if (inputs.retentionDays) {
                     options.retentionDays = inputs.retentionDays;
                 }
-                const uploadResponse = yield artifactClient.uploadArtifact(inputs.artifactName, searchResult.filesToUpload, searchResult.rootDirectory, options);
-                if (uploadResponse.failedItems.length > 0) {
-                    core.setFailed(`An error was encountered when uploading ${uploadResponse.artifactName}. There were ${uploadResponse.failedItems.length} items that failed to upload.`);
+                const artifactNameOpt = inputs['artifactName'];
+                const singleArtifactName = artifactNameOpt
+                    ? inputs['artifactName']
+                    : 'artifact';
+                const artifactPerFileOpt = inputs['artifactPerFile'];
+                const artifactPerFile = artifactPerFileOpt
+                    ? inputs['artifactPerFile']
+                    : false;
+                let githubWorkspacePath = process.env['GITHUB_WORKSPACE'] || undefined;
+                if (!githubWorkspacePath) {
+                    core.warning('GITHUB_WORKSPACE not defined');
                 }
                 else {
-                    core.info(`Artifact ${uploadResponse.artifactName} has been successfully uploaded!`);
+                    githubWorkspacePath = path.resolve(githubWorkspacePath);
+                    core.info(`GITHUB_WORKSPACE = '${githubWorkspacePath}'`);
+                }
+                const rootDirectory = searchResult.rootDirectory;
+                if (!artifactPerFile) {
+                    const uploadResponse = yield artifactClient.uploadArtifact(singleArtifactName, searchResult.filesToUpload, searchResult.rootDirectory, options);
+                    if (uploadResponse.failedItems.length > 0) {
+                        core.setFailed(`An error was encountered when uploading ${uploadResponse.artifactName}. There were ${uploadResponse.failedItems.length} items that failed to upload.`);
+                    }
+                    else {
+                        core.info(`Artifact ${uploadResponse.artifactName} has been successfully uploaded!`);
+                    }
+                }
+                else {
+                    const filesToUpload = searchResult.filesToUpload;
+                    const SuccessedItems = [];
+                    const FailedItems = [];
+                    const artifactNameRule = inputs['artifactNameRule'];
+                    for (let i = 0; i < filesToUpload.length; i++) {
+                        const file = filesToUpload[i];
+                        const pathObject = Object.assign({}, path.parse(file));
+                        const pathBase = pathObject.base;
+                        const pathRoot = githubWorkspacePath
+                            ? githubWorkspacePath
+                            : path.parse(rootDirectory).dir;
+                        pathObject.root = pathRoot;
+                        pathObject['path'] = file.slice(pathRoot.length, file.length - path.sep.length - pathBase.length);
+                        let artifactName = artifactNameRule;
+                        for (const key of Object.keys(pathObject)) {
+                            const re = `$\{${key}}`;
+                            if (artifactNameRule.includes(re)) {
+                                const value = pathObject[key] || '';
+                                artifactName = artifactName.replace(re, value);
+                            }
+                        }
+                        if (artifactName.startsWith(path.sep)) {
+                            core.warning(`${artifactName} startsWith ${path.sep}`);
+                            artifactName = artifactName.slice(path.sep.length);
+                        }
+                        if (artifactName.includes(':')) {
+                            core.warning(`${artifactName} includes :`);
+                            artifactName = artifactName.split(':').join('-');
+                        }
+                        if (artifactName.includes(path.sep)) {
+                            core.warning(`${artifactName} includes ${path.sep}`);
+                            artifactName = artifactName.split(path.sep).join('_');
+                        }
+                        const artifactItemExist = SuccessedItems.includes(artifactName);
+                        if (artifactItemExist) {
+                            const oldArtifactName = artifactName;
+                            core.warning(`${artifactName} artifact alreay exist`);
+                            artifactName = `${i}__${artifactName}`;
+                            core.warning(`${oldArtifactName} => ${artifactName}`);
+                        }
+                        const uploadResponse = yield artifactClient.uploadArtifact(artifactName, [file], rootDirectory, options);
+                        if (uploadResponse.failedItems.length > 0) {
+                            FailedItems.push(artifactName);
+                        }
+                        else {
+                            SuccessedItems.push(artifactName);
+                        }
+                    }
+                    if (FailedItems.length > 0) {
+                        let errMsg = `${FailedItems.length} artifacts failed to upload, they were:\n`;
+                        errMsg += FailedItems.join('\n');
+                        core.setFailed(errMsg);
+                    }
+                    if (SuccessedItems.length > 0) {
+                        let infoMsg = `${SuccessedItems.length} artifacts has been successfully uploaded! They were:\n`;
+                        infoMsg += SuccessedItems.join('\n');
+                        core.info(infoMsg);
+                    }
                 }
             }
         }

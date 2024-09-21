@@ -3,6 +3,7 @@ import {create, UploadOptions} from '@actions/artifact'
 import {findFilesToUpload} from './search'
 import {getInputs} from './input-helper'
 import {NoFileOptions} from './constants'
+import * as path from 'path'
 
 async function run(): Promise<void> {
   try {
@@ -54,21 +55,117 @@ async function run(): Promise<void> {
         options.retentionDays = inputs.retentionDays
       }
 
-      const uploadResponse = await artifactClient.uploadArtifact(
-        inputs.artifactName,
-        searchResult.filesToUpload,
-        searchResult.rootDirectory,
-        options
-      )
+      const artifactNameOpt = inputs['artifactName']
+      const singleArtifactName = artifactNameOpt
+        ? inputs['artifactName']
+        : 'artifact'
 
-      if (uploadResponse.failedItems.length > 0) {
-        core.setFailed(
-          `An error was encountered when uploading ${uploadResponse.artifactName}. There were ${uploadResponse.failedItems.length} items that failed to upload.`
-        )
+      const artifactPerFileOpt = inputs['artifactPerFile']
+      const artifactPerFile = artifactPerFileOpt
+        ? inputs['artifactPerFile']
+        : false
+
+      let githubWorkspacePath = process.env['GITHUB_WORKSPACE'] || undefined
+      if (!githubWorkspacePath) {
+        core.warning('GITHUB_WORKSPACE not defined')
       } else {
-        core.info(
-          `Artifact ${uploadResponse.artifactName} has been successfully uploaded!`
+        githubWorkspacePath = path.resolve(githubWorkspacePath)
+        core.info(`GITHUB_WORKSPACE = '${githubWorkspacePath}'`)
+      }
+
+      const rootDirectory = searchResult.rootDirectory
+
+      if (!artifactPerFile) {
+        const uploadResponse = await artifactClient.uploadArtifact(
+          singleArtifactName,
+          searchResult.filesToUpload,
+          searchResult.rootDirectory,
+          options
         )
+
+        if (uploadResponse.failedItems.length > 0) {
+          core.setFailed(
+            `An error was encountered when uploading ${uploadResponse.artifactName}. There were ${uploadResponse.failedItems.length} items that failed to upload.`
+          )
+        } else {
+          core.info(
+            `Artifact ${uploadResponse.artifactName} has been successfully uploaded!`
+          )
+        }
+      } else {
+        const filesToUpload = searchResult.filesToUpload
+        const SuccessedItems: string[] = []
+        const FailedItems: string[] = []
+
+        const artifactNameRule = inputs['artifactNameRule']
+        for (let i = 0; i < filesToUpload.length; i++) {
+          const file = filesToUpload[i]
+
+          const pathObject = Object.assign({}, path.parse(file))
+          const pathBase = pathObject.base
+          const pathRoot = githubWorkspacePath
+            ? githubWorkspacePath
+            : path.parse(rootDirectory).dir
+          pathObject.root = pathRoot
+
+          pathObject['path'] = file.slice(
+            pathRoot.length,
+            file.length - path.sep.length - pathBase.length
+          )
+
+          let artifactName = artifactNameRule
+          for (const key of Object.keys(pathObject)) {
+            const re = `$\{${key}}`
+            if (artifactNameRule.includes(re)) {
+              const value = pathObject[key] || ''
+              artifactName = artifactName.replace(re, value)
+            }
+          }
+
+          if (artifactName.startsWith(path.sep)) {
+            core.warning(`${artifactName} startsWith ${path.sep}`)
+            artifactName = artifactName.slice(path.sep.length)
+          }
+          if (artifactName.includes(':')) {
+            core.warning(`${artifactName} includes :`)
+            artifactName = artifactName.split(':').join('-')
+          }
+          if (artifactName.includes(path.sep)) {
+            core.warning(`${artifactName} includes ${path.sep}`)
+            artifactName = artifactName.split(path.sep).join('_')
+          }
+
+          const artifactItemExist = SuccessedItems.includes(artifactName)
+          if (artifactItemExist) {
+            const oldArtifactName = artifactName
+            core.warning(`${artifactName} artifact alreay exist`)
+            artifactName = `${i}__${artifactName}`
+            core.warning(`${oldArtifactName} => ${artifactName}`)
+          }
+
+          const uploadResponse = await artifactClient.uploadArtifact(
+            artifactName,
+            [file],
+            rootDirectory,
+            options
+          )
+          if (uploadResponse.failedItems.length > 0) {
+            FailedItems.push(artifactName)
+          } else {
+            SuccessedItems.push(artifactName)
+          }
+        }
+
+        if (FailedItems.length > 0) {
+          let errMsg = `${FailedItems.length} artifacts failed to upload, they were:\n`
+          errMsg += FailedItems.join('\n')
+          core.setFailed(errMsg)
+        }
+        if (SuccessedItems.length > 0) {
+          let infoMsg = `${SuccessedItems.length} artifacts has been successfully uploaded! They were:\n`
+          infoMsg += SuccessedItems.join('\n')
+          core.info(infoMsg)
+        }
       }
     }
   } catch (error) {
