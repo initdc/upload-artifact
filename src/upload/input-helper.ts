@@ -1,15 +1,17 @@
 import * as core from '@actions/core'
 import {Inputs, NoFileOptions} from './constants'
-import {UploadInputs} from './upload-inputs'
+import {UploadInputs, UploadEachInputs} from './upload-inputs'
 
 /**
  * Helper to get all the inputs for the action
  */
-export function getInputs(): UploadInputs {
+export function getInputs(): UploadInputs | UploadEachInputs {
   const name = core.getInput(Inputs.Name)
   const path = core.getInput(Inputs.Path, {required: true})
   const overwrite = core.getBooleanInput(Inputs.Overwrite)
   const includeHiddenFiles = core.getBooleanInput(Inputs.IncludeHiddenFiles)
+  const artifactPerFile = core.getBooleanInput(Inputs.ArtifactPerFile)
+  const artifactNameRule = core.getInput(Inputs.ArtifactNameRule)
 
   const ifNoFilesFound = core.getInput(Inputs.IfNoFilesFound)
   const noFileBehavior: NoFileOptions = NoFileOptions[ifNoFilesFound]
@@ -24,13 +26,28 @@ export function getInputs(): UploadInputs {
     )
   }
 
-  const inputs = {
-    artifactName: name,
-    searchPath: path,
-    ifNoFilesFound: noFileBehavior,
-    overwrite: overwrite,
-    includeHiddenFiles: includeHiddenFiles
-  } as UploadInputs
+  const typedInputs = (artifactPerFile: boolean): UploadInputs | UploadEachInputs => {
+    if (artifactPerFile) {
+      return {
+        artifactName: name,
+        searchPath: path,
+        ifNoFilesFound: noFileBehavior,
+        overwrite: overwrite,
+        includeHiddenFiles: includeHiddenFiles
+      } as UploadInputs
+    } else {
+       return {
+        searchPath: path,
+        ifNoFilesFound: noFileBehavior,
+        overwrite: overwrite,
+        includeHiddenFiles: includeHiddenFiles,
+        artifactPerFile: artifactPerFile,
+        artifactNameRule: artifactNameRule
+      } as UploadEachInputs
+    }
+  }
+
+  const inputs = typedInputs(artifactPerFile)
 
   const retentionDaysStr = core.getInput(Inputs.RetentionDays)
   if (retentionDaysStr) {

@@ -6,7 +6,9 @@ export enum Inputs {
   RetentionDays = 'retention-days',
   CompressionLevel = 'compression-level',
   Overwrite = 'overwrite',
-  IncludeHiddenFiles = 'include-hidden-files'
+  IncludeHiddenFiles = 'include-hidden-files',
+  ArtifactPerFile = 'artifact-per-file',
+  ArtifactNameRule = 'artifact-name-rule'
 }
 
 export enum NoFileOptions {

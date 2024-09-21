@@ -45,6 +45,32 @@ inputs:
       If true, hidden files will be included in the artifact.
       If false, hidden files will be excluded from the artifact.
     default: 'false'
+  artifact-per-file:
+    description: Create one artifact for each file
+    default: false
+  artifact-name-rule:
+    description: >
+      // ref: https://nodejs.org/docs/latest-v20.x/api/path.html#pathparsepath
+      Modified from path.parse()
+
+      path.parse('/home/user/dir/file.txt')
+      { root: '/',
+        dir: '/home/user/dir',
+        path: 'home/user/dir'
+        base: 'file.txt',
+        ext: '.txt',
+        name: 'file' }
+
+      ┌─────────────────────┬────────────┐
+      │          dir       sep   base    │
+      ├──────┬──────────────┼──────┬─────┤
+      │ root │     path     │ name │ ext │
+      "  /    home/user/dir / file  .txt "
+      └──────┴──────────────┴──────┴─────┘
+      (All spaces in the "" line should be ignored. They are purely for formatting.)
+      Every key need in wrapper: ${}
+      sep just for prompt, can't be used
+    default: ${base}.zip
 
 outputs:
   artifact-id:
